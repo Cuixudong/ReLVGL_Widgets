@@ -53,10 +53,11 @@ typedef uint8_t lv_keyboard_mode_t;
 #define PY_CODE_MAX_LEN 6
 /*Data of keyboard*/
 typedef struct {
-    lv_btnmatrix_ext_t btnm; /*Ext. of ancestor*/
+    lv_obj_t * btnm;
     /*New data for this type */
     lv_obj_t * ta;          /*Pointer to the assigned text area*/
     lv_obj_t * match_word;
+    lv_obj_t * match_word_btn;
     lv_keyboard_mode_t mode;      /*Key map type*/
     uint8_t cursor_mng : 1; /*1: automatically show/hide cursor when a text area is assigned or left*/
     uint8_t py_code_p;

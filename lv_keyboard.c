@@ -28,6 +28,9 @@
  **********************/
 static lv_res_t lv_keyboard_signal(lv_obj_t * kb, lv_signal_t sign, void * param);
 static void lv_keyboard_update_map(lv_obj_t * kb);
+static void lv_keyboard_show_match_ch(lv_obj_t * kb, uint8_t mode, char ch);
+static void lv_keyboard_match_clear(lv_obj_t * kb);
+static lv_event_cb_t match_word_click_cb (lv_obj_t * label, lv_event_t e);
 
 /**********************
  *  STATIC VARIABLES
@@ -1033,7 +1036,7 @@ const py_index py_code_table[]=
 {"zhuang",&py_code_table_zhuang},
 };
 
-py_index *  py_code_res[10];
+py_index *py_code_res[10];
 
 uint8_t str_match(char * str1,char * str2)
 {
@@ -1102,10 +1105,12 @@ lv_obj_t * lv_keyboard_create(lv_obj_t * par, const lv_obj_t * copy)
     LV_LOG_TRACE("keyboard create started");
 
     /*Create the ancestor of keyboard*/
-    lv_obj_t * kb = lv_btnmatrix_create(par, copy);
+    lv_obj_t * kb = lv_obj_create(par, copy);
     LV_ASSERT_MEM(kb);
     if(kb == NULL) return NULL;
 
+    lv_obj_set_style_local_border_width(kb, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, 0);
+    lv_obj_set_style_local_radius(kb, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, 0);
     if(ancestor_signal == NULL) ancestor_signal = lv_obj_get_signal_cb(kb);
 
     /*Allocate the keyboard type specific extended data*/
@@ -1142,19 +1147,36 @@ lv_obj_t * lv_keyboard_create(lv_obj_t * par, const lv_obj_t * copy)
                         lv_obj_get_height_fit(lv_obj_get_parent(kb)) / 2);
         }
         lv_obj_align(kb, NULL, LV_ALIGN_IN_BOTTOM_MID, 0, 0);
-        lv_obj_set_event_cb(kb, lv_keyboard_def_event_cb);
-        lv_obj_set_base_dir(kb, LV_BIDI_DIR_LTR);
-        lv_obj_add_protect(kb, LV_PROTECT_CLICK_FOCUS);
 
-        lv_btnmatrix_set_map(kb, kb_map[ext->mode]);
-        lv_btnmatrix_set_ctrl_map(kb, kb_ctrl[ext->mode]);
+        ext->btnm = lv_btnmatrix_create(kb, NULL);
+        lv_btnmatrix_set_map(ext->btnm, kb_map[ext->mode]);
+        lv_btnmatrix_set_ctrl_map(ext->btnm, kb_ctrl[ext->mode]);
+        lv_obj_set_size(ext->btnm, lv_obj_get_width(kb),
+                        lv_obj_get_height(kb) * 5 / 6);
+        lv_obj_align(ext->btnm, kb, LV_ALIGN_IN_BOTTOM_MID, 0, 0);
+        lv_obj_set_event_cb(ext->btnm, lv_keyboard_def_event_cb);
+        lv_obj_set_base_dir(ext->btnm, LV_BIDI_DIR_LTR);
+        lv_obj_add_protect(ext->btnm, LV_PROTECT_CLICK_FOCUS);
 
-        ext->match_word = lv_label_create(kb,NULL);
+        ext->match_word = lv_label_create(kb, NULL);
         lv_label_set_text(ext->match_word,"");
-        lv_obj_align(ext->match_word,kb,LV_ALIGN_IN_TOP_LEFT,10,2);
+        lv_obj_align(ext->match_word, kb, LV_ALIGN_IN_TOP_LEFT, 5, 2);
 
-        lv_theme_apply(kb, LV_THEME_KEYBOARD);
-        lv_obj_set_style_local_text_font(kb,LV_KEYBOARD_PART_BTN,LV_STATE_DEFAULT,&lv_font_montserrat_16);
+        ext->match_word_btn = lv_cont_create(kb, NULL);
+        //lv_obj_set_size(ext->match_word_btn,lv_obj_get_width(kb) - 20,38);
+
+        lv_obj_set_style_local_border_width(ext->match_word_btn, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, 0);
+        lv_obj_set_style_local_radius(ext->match_word_btn, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, 0);
+        lv_obj_set_style_local_bg_opa(ext->match_word_btn, LV_OBJ_PART_MAIN, LV_STATE_DEFAULT, 0);
+        lv_obj_set_auto_realign(ext->match_word_btn, false);
+        lv_cont_set_fit(ext->match_word_btn, LV_FIT_TIGHT);
+        lv_cont_set_layout(ext->match_word_btn, LV_LAYOUT_ROW_MID);
+        lv_obj_set_drag(ext->match_word_btn,true);
+        lv_obj_set_drag_dir(ext->match_word_btn,LV_DRAG_DIR_HOR);
+        lv_obj_align(ext->match_word_btn, ext->match_word, LV_ALIGN_OUT_BOTTOM_LEFT, 0, -10);
+
+        lv_theme_apply(ext->btnm, LV_THEME_KEYBOARD);
+        lv_obj_set_style_local_text_font(ext->btnm, LV_KEYBOARD_PART_BTN,LV_STATE_DEFAULT,&lv_font_montserrat_16);
     }
     /*Copy an existing keyboard*/
     else {
@@ -1163,8 +1185,8 @@ lv_obj_t * lv_keyboard_create(lv_obj_t * par, const lv_obj_t * copy)
         ext->mode              = copy_ext->mode;
         ext->cursor_mng        = copy_ext->cursor_mng;
 
-        lv_btnmatrix_set_map(kb, kb_map[ext->mode]);
-        lv_btnmatrix_set_ctrl_map(kb, kb_ctrl[ext->mode]);
+        lv_btnmatrix_set_map(ext->btnm, kb_map[ext->mode]);
+        lv_btnmatrix_set_ctrl_map(ext->btnm, kb_ctrl[ext->mode]);
 
         /*Refresh the style with new signal function*/
         //        lv_obj_refresh_style(new_kb);
@@ -1219,8 +1241,8 @@ void lv_keyboard_set_mode(lv_obj_t * kb, lv_keyboard_mode_t mode)
     if(ext->mode == mode) return;
 
     ext->mode = mode;
-    lv_btnmatrix_set_map(kb, kb_map[mode]);
-    lv_btnmatrix_set_ctrl_map(kb, kb_ctrl[mode]);
+    lv_btnmatrix_set_map(ext->btnm, kb_map[mode]);
+    lv_btnmatrix_set_ctrl_map(ext->btnm, kb_ctrl[mode]);
 }
 
 /**
@@ -1257,8 +1279,11 @@ void lv_keyboard_set_cursor_manage(lv_obj_t * kb, bool en)
  */
 void lv_keyboard_set_map(lv_obj_t * kb, lv_keyboard_mode_t mode, const char * map[])
 {
+    LV_ASSERT_OBJ(kb, LV_OBJX_NAME);
+
+    lv_keyboard_ext_t * ext = lv_obj_get_ext_attr(kb);
     kb_map[mode] = map;
-    lv_keyboard_update_map(kb);
+    lv_keyboard_update_map(ext->btnm);
 }
 
 /**
@@ -1272,8 +1297,11 @@ void lv_keyboard_set_map(lv_obj_t * kb, lv_keyboard_mode_t mode, const char * ma
  */
 void lv_keyboard_set_ctrl_map(lv_obj_t * kb, lv_keyboard_mode_t mode, const lv_btnmatrix_ctrl_t ctrl_map[])
 {
+    LV_ASSERT_OBJ(kb, LV_OBJX_NAME);
+
+    lv_keyboard_ext_t * ext = lv_obj_get_ext_attr(kb);
     kb_ctrl[mode] = ctrl_map;
-    lv_keyboard_update_map(kb);
+    lv_keyboard_update_map(ext->btnm);
 }
 
 /*=====================
@@ -1337,34 +1365,34 @@ void lv_keyboard_def_event_cb(lv_obj_t * kb, lv_event_t event)
     if(event != LV_EVENT_VALUE_CHANGED) return;
 
     lv_keyboard_ext_t * ext = lv_obj_get_ext_attr(kb);
-    uint16_t btn_id   = lv_btnmatrix_get_active_btn(kb);
+    uint16_t btn_id   = lv_btnmatrix_get_active_btn(ext->btnm);
     if(btn_id == LV_BTNMATRIX_BTN_NONE) return;
-    if(lv_btnmatrix_get_btn_ctrl(kb, btn_id, LV_BTNMATRIX_CTRL_HIDDEN | LV_BTNMATRIX_CTRL_DISABLED)) return;
-    if(lv_btnmatrix_get_btn_ctrl(kb, btn_id, LV_BTNMATRIX_CTRL_NO_REPEAT) && event == LV_EVENT_LONG_PRESSED_REPEAT) return;
+    if(lv_btnmatrix_get_btn_ctrl(ext->btnm, btn_id, LV_BTNMATRIX_CTRL_HIDDEN | LV_BTNMATRIX_CTRL_DISABLED)) return;
+    if(lv_btnmatrix_get_btn_ctrl(ext->btnm, btn_id, LV_BTNMATRIX_CTRL_NO_REPEAT) && event == LV_EVENT_LONG_PRESSED_REPEAT) return;
 
-    const char * txt = lv_btnmatrix_get_active_btn_text(kb);
+    const char * txt = lv_btnmatrix_get_active_btn_text(ext->btnm);
     if(txt == NULL) return;
 
     /*Do the corresponding action according to the text of the button*/
     if(strcmp(txt, "abc") == 0) {
         ext->mode = LV_KEYBOARD_MODE_TEXT_LOWER;
-        lv_btnmatrix_set_map(kb, kb_map[LV_KEYBOARD_MODE_TEXT_LOWER]);
-        lv_btnmatrix_set_ctrl_map(kb, kb_ctrl[LV_KEYBOARD_MODE_TEXT_LOWER]);
+        lv_btnmatrix_set_map(ext->btnm, kb_map[LV_KEYBOARD_MODE_TEXT_LOWER]);
+        lv_btnmatrix_set_ctrl_map(ext->btnm, kb_ctrl[LV_KEYBOARD_MODE_TEXT_LOWER]);
         lv_label_set_text(ext->match_word,"");
         return;
     }
 #if LV_USE_ARABIC_PERSIAN_CHARS == 1
     else if(strcmp(txt, "أب") == 0) {
         ext->mode = LV_KEYBOARD_MODE_TEXT_ARABIC;
-        lv_btnmatrix_set_map(kb, kb_map[LV_KEYBOARD_MODE_TEXT_ARABIC]);
-        lv_btnmatrix_set_ctrl_map(kb, kb_ctrl[LV_KEYBOARD_MODE_TEXT_ARABIC]);
+        lv_btnmatrix_set_map(ext->btnm, kb_map[LV_KEYBOARD_MODE_TEXT_ARABIC]);
+        lv_btnmatrix_set_ctrl_map(ext->btnm, kb_ctrl[LV_KEYBOARD_MODE_TEXT_ARABIC]);
         return;
     }
 #endif
     else if(strcmp(txt, "Ch") == 0) {
         ext->mode = LV_KEYBOARD_MODE_CH;
-        lv_btnmatrix_set_map(kb, kb_map[LV_KEYBOARD_MODE_CH]);
-        lv_btnmatrix_set_ctrl_map(kb, kb_ctrl[LV_KEYBOARD_MODE_CH]);
+        lv_btnmatrix_set_map(ext->btnm, kb_map[LV_KEYBOARD_MODE_CH]);
+        lv_btnmatrix_set_ctrl_map(ext->btnm, kb_ctrl[LV_KEYBOARD_MODE_CH]);
         ext->py_code_p = 0; //刚切换中文时输入长度清零
         ext->py_code[0] = '\0';
         lv_label_set_text(ext->match_word,"拼音:");
@@ -1372,15 +1400,15 @@ void lv_keyboard_def_event_cb(lv_obj_t * kb, lv_event_t event)
     }
     else if(strcmp(txt, "ABC") == 0) {
         ext->mode = LV_KEYBOARD_MODE_TEXT_UPPER;
-        lv_btnmatrix_set_map(kb, kb_map[LV_KEYBOARD_MODE_TEXT_UPPER]);
-        lv_btnmatrix_set_ctrl_map(kb, kb_ctrl[LV_KEYBOARD_MODE_TEXT_UPPER]);
+        lv_btnmatrix_set_map(ext->btnm, kb_map[LV_KEYBOARD_MODE_TEXT_UPPER]);
+        lv_btnmatrix_set_ctrl_map(ext->btnm, kb_ctrl[LV_KEYBOARD_MODE_TEXT_UPPER]);
         lv_label_set_text(ext->match_word,"");
         return;
     }
     else if(strcmp(txt, "1#") == 0) {
         ext->mode = LV_KEYBOARD_MODE_SPECIAL;
-        lv_btnmatrix_set_map(kb, kb_map[LV_KEYBOARD_MODE_SPECIAL]);
-        lv_btnmatrix_set_ctrl_map(kb, kb_ctrl[LV_KEYBOARD_MODE_SPECIAL]);
+        lv_btnmatrix_set_map(ext->btnm, kb_map[LV_KEYBOARD_MODE_SPECIAL]);
+        lv_btnmatrix_set_ctrl_map(ext->btnm, kb_ctrl[LV_KEYBOARD_MODE_SPECIAL]);
         lv_label_set_text(ext->match_word,"");
         return;
     }
@@ -1411,7 +1439,24 @@ void lv_keyboard_def_event_cb(lv_obj_t * kb, lv_event_t event)
     if(ext->ta == NULL) return;
 
     if(strcmp(txt, "Enter") == 0 || strcmp(txt, LV_SYMBOL_NEW_LINE) == 0)
-        lv_textarea_add_char(ext->ta, '\n');
+    {
+        if(ext->mode == LV_KEYBOARD_MODE_CH)
+        {
+            if(ext->py_code_p > 0)//有中文的时候换行输入英文
+            {
+                lv_textarea_add_text(ext->ta, (const char *)ext->py_code);
+                lv_keyboard_match_clear(kb);
+            }
+            else
+            {
+                lv_textarea_add_char(ext->ta, '\n');
+            }
+        }
+        else
+        {
+            lv_textarea_add_char(ext->ta, '\n');
+        }
+    }
     else if(strcmp(txt, LV_SYMBOL_LEFT) == 0)
         lv_textarea_cursor_left(ext->ta);
     else if(strcmp(txt, LV_SYMBOL_RIGHT) == 0)
@@ -1420,16 +1465,14 @@ void lv_keyboard_def_event_cb(lv_obj_t * kb, lv_event_t event)
     {
         if(ext->mode == LV_KEYBOARD_MODE_CH)
         {
-            if(ext->py_code_p > 0)
+            if(ext->py_code_p>0)
             {
-                ext->py_code_p--;
-                ext->py_code[ext->py_code_p] = '\0';
+                lv_keyboard_show_match_ch(kb, 2, '0');
             }
-            else if(ext->py_code_p == 0)
+            else
             {
-                ext->py_code[ext->py_code_p] = '\0';
+                lv_textarea_del_char(ext->ta);
             }
-            lv_label_set_text_fmt(ext->match_word,"拼音:%s",(const char *)ext->py_code);
         }
         else
         {
@@ -1460,12 +1503,27 @@ void lv_keyboard_def_event_cb(lv_obj_t * kb, lv_event_t event)
     else {
         if(ext->mode == LV_KEYBOARD_MODE_CH)
         {
-            if(ext->py_code_p >= PY_CODE_MAX_LEN - 1)ext->py_code_p = PY_CODE_MAX_LEN - 1;
-            ext->py_code[ext->py_code_p] = (char)txt[0];
-            ext->py_code[ext->py_code_p+1] = '\0';
-            ext->py_code_p++;
-            if(get_matched_py_code((char *)ext->py_code, py_code_res) > 0)
-            lv_label_set_text_fmt(ext->match_word,"拼音:%s,匹配字:%s",(const char *)ext->py_code, py_code_res[0]->py_code);
+            if((txt[0] >= 'a')&&(txt[0] <= 'z'))
+            {
+                lv_keyboard_show_match_ch(kb, 1, (char)txt[0]);
+            }
+            else if(txt[0] == ' ')//空格输入第一个文字
+            {
+                if(get_matched_py_code((char *)ext->py_code, py_code_res) > 0)
+                {
+                    char s[4];
+                    s[0] = py_code_res[0]->py_code[0];
+                    s[1] = py_code_res[0]->py_code[1];
+                    s[2] = py_code_res[0]->py_code[2];
+                    s[3] = '\0';
+                    lv_textarea_add_text(ext->ta, (const char *)s);
+                    lv_keyboard_match_clear(kb);
+                }
+            }
+            else//符号直接输入
+            {
+                lv_textarea_add_text(ext->ta, txt);
+            }
         }
         else
         {
@@ -1522,8 +1580,82 @@ static lv_res_t lv_keyboard_signal(lv_obj_t * kb, lv_signal_t sign, void * param
 static void lv_keyboard_update_map(lv_obj_t * kb)
 {
     lv_keyboard_ext_t * ext = lv_obj_get_ext_attr(kb);
-    lv_btnmatrix_set_map(kb, kb_map[ext->mode]);
-    lv_btnmatrix_set_ctrl_map(kb, kb_ctrl[ext->mode]);
+    lv_btnmatrix_set_map(ext->btnm, kb_map[ext->mode]);
+    lv_btnmatrix_set_ctrl_map(ext->btnm, kb_ctrl[ext->mode]);
+}
+
+static void lv_keyboard_match_clear(lv_obj_t * kb)
+{
+    lv_keyboard_ext_t * ext = lv_obj_get_ext_attr(kb);
+    ext->py_code_p = 0;
+    ext->py_code[ext->py_code_p] = '\0';
+    lv_label_set_text_fmt(ext->match_word,"拼音:");
+    if(1)lv_obj_clean(ext->match_word_btn);
+    lv_obj_align(ext->match_word_btn, ext->match_word, LV_ALIGN_OUT_BOTTOM_LEFT, 0, -10);//重置匹配字位置
+}
+
+static lv_event_cb_t match_word_click_cb (lv_obj_t * label, lv_event_t e)
+{
+    if(e == LV_EVENT_SHORT_CLICKED)
+    {
+        lv_obj_t * kb = lv_obj_get_parent(lv_obj_get_parent(label));
+        lv_keyboard_ext_t * ext = lv_obj_get_ext_attr(kb);
+        lv_textarea_add_text(ext->ta, lv_label_get_text(label));
+        lv_keyboard_match_clear(kb);
+    }
+}
+
+static void lv_keyboard_show_match_ch(lv_obj_t * kb, uint8_t mode, char ch)
+{
+    int i;
+    int len;
+    char str[4];
+    lv_keyboard_ext_t * ext = lv_obj_get_ext_attr(kb);
+
+    lv_obj_clean(ext->match_word_btn);
+    if(mode == 1)
+    {
+        if(ext->py_code_p >= PY_CODE_MAX_LEN - 1)ext->py_code_p = PY_CODE_MAX_LEN - 1;
+        ext->py_code[ext->py_code_p] = ch;
+        ext->py_code[ext->py_code_p+1] = '\0';
+        ext->py_code_p++;
+    }
+    else if(mode == 2)
+    {
+        if(ext->py_code_p > 0)
+        {
+            ext->py_code_p--;
+            ext->py_code[ext->py_code_p] = '\0';
+        }
+        else if(ext->py_code_p == 0)
+        {
+            ext->py_code[ext->py_code_p] = '\0';
+        }
+    }
+    if(get_matched_py_code((char *)ext->py_code, py_code_res) > 0)
+    {
+        if(0)lv_label_set_text_fmt(ext->match_word,"拼音:%s,匹配字:%s",(const char *)ext->py_code, py_code_res[0]->py_code);
+        lv_label_set_text_fmt(ext->match_word,"拼音:%s",(const char *)ext->py_code);
+        len = strlen(py_code_res[0]->py_code);
+        lv_obj_set_width(ext->match_word_btn,32 * len / 3);
+        for(i = 0;i < len / 3;i++)
+        {
+            lv_obj_t * btn = lv_label_create(ext->match_word_btn,NULL);
+            lv_obj_set_size(btn,32,32);
+            //lv_obj_align(btn, ext->match_word_btn, LV_ALIGN_IN_LEFT_MID, i * 34, 0);
+            str[0] = py_code_res[0]->py_code[i * 3 + 0];
+            str[1] = py_code_res[0]->py_code[i * 3 + 1];
+            str[2] = py_code_res[0]->py_code[i * 3 + 2];
+            str[3] = '\0';
+            lv_label_set_text(btn,(const char *)str);
+            lv_obj_set_click(btn,true);
+            lv_obj_set_event_cb(btn,match_word_click_cb);
+        }
+    }
+    else
+    {
+        lv_label_set_text_fmt(ext->match_word,"拼音:%s",(const char *)ext->py_code);
+    }
 }
 
 #endif
